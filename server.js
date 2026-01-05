@@ -15,11 +15,13 @@ io.on('connection', (socket) => {
 
   socket.on('join-id', (id) => {
     const hostId = rooms[id];
-    if (hostId) {
-      socket.emit('peer-joined', hostId);
-    } else {
+    if (!hostId) {
       socket.emit('error', 'ID não encontrado');
+      return;
     }
+
+    socket.emit('peer-joined', hostId);
+    io.to(hostId).emit('peer-ready', socket.id);
   });
 
   socket.on('peer-ready', ({ to }) => {
