@@ -1,6 +1,7 @@
 const io = require('socket.io')(3000, {
   cors: { origin: '*' },
-  transports: ['websocket']
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 const rooms = {};
@@ -14,18 +15,19 @@ io.on('connection', (socket) => {
 
   socket.on('join-id', (id) => {
     const hostId = rooms[id];
-    if (hostId && io.sockets.sockets.has(hostId)) {
-      // Avisa o host que alguém entrou
-      io.to(hostId).emit('peer-joined', socket.id);
-      // Avisa o cliente quem é o host
+    if (hostId) {
       socket.emit('peer-joined', hostId);
     } else {
-      socket.emit('error', 'ID Inválido ou Host Offline');
+      socket.emit('error', 'ID não encontrado');
     }
   });
 
-  socket.on('signal', (data) => {
-    io.to(data.to).emit('signal', { from: socket.id, signal: data.signal });
+  socket.on('peer-ready', ({ to }) => {
+    io.to(to).emit('peer-ready', socket.id);
+  });
+
+  socket.on('signal', ({ to, signal }) => {
+    io.to(to).emit('signal', { from: socket.id, signal });
   });
 
   socket.on('disconnect', () => {
@@ -34,5 +36,3 @@ io.on('connection', (socket) => {
     }
   });
 });
-
-console.log('Signaling server running on port 3000');

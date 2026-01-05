@@ -5,49 +5,63 @@ const io = require('socket.io-client');
 class Shuttle {
   constructor(signalUrl = 'http://localhost:3000') {
     this.socket = io(signalUrl, { transports: ['websocket'] });
+    this.activePeers = new Set();
   }
 
   push(initialPayload) {
     return new Promise((resolve) => {
       this.socket.emit('create-id');
+      
       this.socket.once('id-generated', (id) => {
-        const peerReadyHandler = (peerId) => {
+        this.socket.on('peer-ready', (peerId) => {
           const p = new Peer({
             initiator: true,
-            trickle: false,
+            trickle: true,
             wrtc,
             config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] }
           });
 
-          p.on('signal', (signal) => this.socket.emit('signal', { to: peerId, signal }));
-          
-          const signalHandler = (data) => {
+          this.activePeers.add(p);
+
+          p.on('signal', (signal) => {
+            this.socket.emit('signal', { to: peerId, signal });
+          });
+
+          const onSignal = (data) => {
             if (data.from === peerId) p.signal(data.signal);
           };
-          this.socket.on('signal', signalHandler);
+          this.socket.on('signal', onSignal);
 
           p.on('connect', () => {
             p.send(JSON.stringify(initialPayload));
-            this.connectedPeer = p;
+            // Mantemos a conexão viva para o modo watch
           });
 
           p.on('close', () => {
-            this.socket.off('signal', signalHandler);
+            this.activePeers.delete(p);
+            this.socket.off('signal', onSignal);
           });
-        };
 
-        this.socket.on('peer-ready', peerReadyHandler);
+          p.on('error', (err) => {
+            console.error('Peer Error:', err);
+            this.activePeers.delete(p);
+          });
+        });
 
+        // Resolvemos o ID imediatamente para o CLI mostrar, 
+        // mas o peerPromise aguarda o evento de conexão real
         resolve({
           id,
           peerPromise: new Promise((res) => {
-            this.socket.once('peer-ready', () => {
-              const checkConnection = setInterval(() => {
-                if (this.connectedPeer && this.connectedPeer.connected) {
-                  clearInterval(checkConnection);
-                  res(this.connectedPeer);
+            this.socket.on('peer-ready', () => {
+              const check = setInterval(() => {
+                for (const p of this.activePeers) {
+                  if (p.connected) {
+                    clearInterval(check);
+                    res(p);
+                  }
                 }
-              }, 100);
+              }, 500);
             });
           })
         });
@@ -58,23 +72,25 @@ class Shuttle {
   pull(id, onData) {
     return new Promise((resolve, reject) => {
       this.socket.emit('join-id', id);
-      
+
       this.socket.once('peer-joined', (hostId) => {
         const p = new Peer({
           initiator: false,
-          trickle: false,
+          trickle: true,
           wrtc,
           config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] }
         });
 
-        this.socket.emit('peer-ready', { to: hostId });
+        this.activePeers.add(p);
 
-        p.on('signal', (signal) => this.socket.emit('signal', { to: hostId, signal }));
-        
-        const signalHandler = (data) => {
+        p.on('signal', (signal) => {
+          this.socket.emit('signal', { to: hostId, signal });
+        });
+
+        const onSignal = (data) => {
           if (data.from === hostId) p.signal(data.signal);
         };
-        this.socket.on('signal', signalHandler);
+        this.socket.on('signal', onSignal);
 
         p.on('connect', () => {
           resolve(p);
@@ -82,20 +98,21 @@ class Shuttle {
 
         p.on('data', (data) => {
           try {
-            const parsed = JSON.parse(data.toString());
-            if (onData) onData(parsed);
+            const json = JSON.parse(data.toString());
+            if (onData) onData(json);
           } catch (e) {
-            console.error("Erro ao processar dados recebidos", e);
+            console.error('Data Parse Error');
           }
         });
 
         p.on('error', (err) => {
-          this.socket.off('signal', signalHandler);
+          this.socket.off('signal', onSignal);
           reject(err);
         });
 
         p.on('close', () => {
-          this.socket.off('signal', signalHandler);
+          this.activePeers.delete(p);
+          this.socket.off('signal', onSignal);
         });
       });
     });
