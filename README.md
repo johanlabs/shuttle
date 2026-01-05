@@ -17,7 +17,7 @@ It is designed for fast bootstrapping, temporary collaboration, and secure trans
 
 ## Installation
 
-npm install -g shuttle
+npm install -g johankit-shuttle
 
 Or locally:
 
