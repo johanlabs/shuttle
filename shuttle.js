@@ -8,103 +8,91 @@ class Shuttle {
       transports: ['websocket'],
       reconnection: true
     });
-    this.config = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:global.stun.twilio.com:3478' }
-      ]
-    };
   }
 
   push(initialPayload) {
     return new Promise((resolve, reject) => {
-      if (!this.socket.connected) {
-        this.socket.once('connect', () => this._executePush(initialPayload, resolve));
-      } else {
-        this._executePush(initialPayload, resolve);
-      }
-      this.socket.once('connect_error', reject);
-    });
-  }
+      const setup = () => {
+        this.socket.emit('create-id');
+        this.socket.once('id-generated', (id) => {
+          const peerPromise = new Promise((peerResolve) => {
+            this.socket.on('peer-joined', (peerId) => {
+              const p = new Peer({
+                initiator: true,
+                trickle: false,
+                wrtc,
+                config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+              });
 
-  _executePush(initialPayload, resolve) {
-    this.socket.emit('create-id');
-    this.socket.once('id-generated', (id) => {
-      const peerPromise = new Promise((peerResolve) => {
-        const onPeerJoined = (peerId) => {
-          const p = new Peer({ initiator: true, trickle: false, wrtc, config: this.config });
-          
-          p.on('signal', (signal) => {
-            this.socket.emit('signal', { to: peerId, signal });
+              p.on('signal', (signal) => {
+                this.socket.emit('signal', { to: peerId, signal });
+              });
+
+              const signalHandler = (data) => {
+                if (data.from === peerId) p.signal(data.signal);
+              };
+
+              this.socket.on('signal', signalHandler);
+
+              p.on('connect', () => {
+                p.send(JSON.stringify(initialPayload));
+                peerResolve(p);
+              });
+
+              p.on('close', () => this.socket.off('signal', signalHandler));
+              p.on('error', (err) => console.error('P2P Push Error:', err));
+            });
           });
+          resolve({ id, peerPromise });
+        });
+      };
 
-          const onSignal = (data) => {
-            if (data.from === peerId) p.signal(data.signal);
-          };
-
-          this.socket.on('signal', onSignal);
-
-          p.on('connect', () => {
-            p.send(JSON.stringify(initialPayload));
-            peerResolve(p);
-          });
-
-          p.on('close', () => {
-            this.socket.off('signal', onSignal);
-          });
-        };
-
-        this.socket.on('peer-joined', onPeerJoined);
-      });
-      resolve({ id, peerPromise });
+      if (this.socket.connected) setup();
+      else this.socket.once('connect', setup);
     });
   }
 
   pull(id, onData) {
     return new Promise((resolve, reject) => {
-      const startPull = () => {
+      const setup = () => {
         this.socket.emit('join-id', id);
         
-        this.socket.once('peer-joined', (peerId) => {
-          const p = new Peer({ initiator: false, trickle: false, wrtc, config: this.config });
+        this.socket.on('peer-joined', (peerId) => {
+          const p = new Peer({
+            initiator: false,
+            trickle: false,
+            wrtc,
+            config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+          });
 
           p.on('signal', (signal) => {
             this.socket.emit('signal', { to: peerId, signal });
           });
 
-          const onSignal = (data) => {
+          const signalHandler = (data) => {
             if (data.from === peerId) p.signal(data.signal);
           };
 
-          this.socket.on('signal', onSignal);
+          this.socket.on('signal', signalHandler);
 
           p.on('data', (data) => {
-            try {
-              const parsed = JSON.parse(data.toString());
-              onData(parsed);
-            } catch (e) {
-              console.error('Data parse error');
-            }
+            const parsed = JSON.parse(data.toString());
+            onData(parsed);
           });
 
-          p.on('error', (err) => {
-            this.socket.off('signal', onSignal);
-            reject(err);
+          p.on('connect', () => {
+            // Conectado com sucesso
           });
-          
-          p.on('close', () => {
-            this.socket.off('signal', onSignal);
-          });
+
+          p.on('close', () => this.socket.off('signal', signalHandler));
+          p.on('error', (err) => reject(err));
         });
 
-        this.socket.once('error', (msg) => reject(new Error(msg)));
+        this.socket.once('error', (err) => reject(new Error(err)));
       };
 
-      if (!this.socket.connected) {
-        this.socket.once('connect', startPull);
-      } else {
-        startPull();
-      }
+      if (this.socket.connected) setup();
+      else this.socket.once('connect', setup);
     });
   }
 }

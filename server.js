@@ -2,41 +2,37 @@ const io = require('socket.io')(3000, {
   cors: { origin: '*' },
   transports: ['websocket']
 });
+
 const rooms = {};
 
 io.on('connection', (socket) => {
-  console.log('Client connected:', socket.id);
-
   socket.on('create-id', () => {
     const id = Math.random().toString(36).substring(2, 8).toUpperCase();
     rooms[id] = socket.id;
     socket.emit('id-generated', id);
-    console.log(`Room created: ${id} by ${socket.id}`);
   });
 
   socket.on('join-id', (id) => {
-    const target = rooms[id];
-    if (target && io.sockets.sockets.has(target)) {
-      socket.emit('peer-joined', target);
-      io.to(target).emit('peer-joined', socket.id);
-      console.log(`Peer ${socket.id} matched with ${target} via ID ${id}`);
+    const hostId = rooms[id];
+    if (hostId && io.sockets.sockets.has(hostId)) {
+      // Avisa o host que alguém entrou
+      io.to(hostId).emit('peer-joined', socket.id);
+      // Avisa o cliente quem é o host
+      socket.emit('peer-joined', hostId);
     } else {
-      socket.emit('error', 'ID not found or host offline');
+      socket.emit('error', 'ID Inválido ou Host Offline');
     }
   });
 
-  socket.on('signal', ({ to, signal }) => {
-    io.to(to).emit('signal', { from: socket.id, signal });
+  socket.on('signal', (data) => {
+    io.to(data.to).emit('signal', { from: socket.id, signal: data.signal });
   });
 
   socket.on('disconnect', () => {
-    Object.keys(rooms).forEach(id => {
-      if (rooms[id] === socket.id) {
-        console.log(`Room ${id} removed (host disconnected)`);
-        delete rooms[id];
-      }
-    });
+    for (const id in rooms) {
+      if (rooms[id] === socket.id) delete rooms[id];
+    }
   });
 });
 
-console.log('Signaling server on port 3000');
+console.log('Signaling server running on port 3000');
