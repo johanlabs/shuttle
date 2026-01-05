@@ -29,16 +29,16 @@ async function scanDirectory(dir, baseDir = '') {
 
 program.command('push')
   .argument('<target>')
-  .option('--live', 'Manter sincronização ativa (one-way)')
-  .option('--allow-changes', 'Permitir propostas de mudanças do pull')
-  .option('--auto-accept', 'Aceitar automaticamente mudanças propostas')
+  .option('--live', 'Manter sincroniza├º├úo ativa')
+  .option('--allow-changes', 'Permitir propostas de mudan├ºas')
+  .option('--auto-accept', 'Aceitar automaticamente mudan├ºas propostas')
   .action(async (target, options) => {
     const spinner = ora('Lendo arquivos...').start();
     const absolutePath = path.resolve(target);
     let payload = [];
 
     if (!(await fs.exists(absolutePath))) {
-      spinner.fail('Caminho não encontrado');
+      spinner.fail('Caminho n├úo encontrado');
       process.exit(1);
     }
 
@@ -63,7 +63,7 @@ program.command('push')
         const rel = path.relative(absolutePath, filePath);
         const content = await fs.readFile(filePath);
         try {
-          p.send(JSON.stringify({ t: 'update', path: rel, content: content.toString('base64') }));
+          p.send(JSON.stringify({ t: 'propose-change', path: rel, content: content.toString('base64') }));
         } catch {}
       });
     }
@@ -75,7 +75,9 @@ program.command('push')
 
 program.command('pull')
   .argument('<id>')
-  .option('--live', 'Receber atualizações contínuas')
+  .option('--live', 'Receber atualiza├ºes cont├¡nuas')
+  .option('--allow-changes', 'Permitir aplicar mudan├ºas recebidas')
+  .option('--auto-accept', 'Aceitar automaticamente mudan├ºas recebidas')
   .action(async (id, options) => {
     const spinner = ora('Conectando...').start();
     const root = process.cwd();
@@ -89,7 +91,7 @@ program.command('pull')
         await fs.ensureDir(path.dirname(dest));
         await fs.writeFile(dest, Buffer.from(file.content, 'base64'));
       }
-    }, { live: options.live, onPeer: (p) => { peerRef = p; } });
+    }, { live: options.live, onPeer: (p) => { peerRef = p; }, allowChanges: options.allowChanges, autoAccept: options.autoAccept, root });
 
     if (options.live) {
       watcher = chokidar.watch(root, { ignoreInitial: true });

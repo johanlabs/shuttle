@@ -126,9 +126,3 @@ pull:
 ## Status
 
 Stable and ready for production use
-
----
-
-## License
-
-ISC

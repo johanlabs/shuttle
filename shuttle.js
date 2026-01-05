@@ -16,6 +16,12 @@ function chunkString(str) {
   return chunks;
 }
 
+function safePath(root, p) {
+  const resolved = path.resolve(root, p);
+  if (!resolved.startsWith(root)) throw new Error('Unsafe path');
+  return resolved;
+}
+
 class Shuttle {
   constructor(signalUrl = 'http://localhost:3000') {
     this.socket = io(signalUrl, { transports: ['websocket'] });
@@ -25,7 +31,6 @@ class Shuttle {
   push(initialPayload, options = {}) {
     return new Promise((resolve) => {
       this.socket.emit('create-id');
-
       this.socket.once('id-generated', (id) => {
         this.socket.on('peer-ready', (peerId) => {
           const p = new Peer({ initiator: true, trickle: true, wrtc });
@@ -41,8 +46,8 @@ class Shuttle {
           this.socket.on('signal', onSignal);
 
           p.on('connect', () => {
-            const payload = JSON.stringify(initialPayload);
-            const chunks = chunkString(payload);
+            const payloadStr = JSON.stringify(initialPayload);
+            const chunks = chunkString(payloadStr);
             for (let i = 0; i < chunks.length; i++) {
               p.send(JSON.stringify({ t: 'chunk', i, d: chunks[i] }));
             }
@@ -51,9 +56,9 @@ class Shuttle {
 
           p.on('data', async (data) => {
             const msg = JSON.parse(data.toString());
-            if (msg.t === 'propose-change' && options.allowChanges) {
+            if ((msg.t === 'propose-change' || msg.t === 'update') && options.allowChanges) {
               if (options.autoAccept && options.root) {
-                const dest = path.resolve(options.root, msg.path);
+                const dest = safePath(options.root, msg.path);
                 await fs.ensureDir(path.dirname(dest));
                 await fs.writeFile(dest, Buffer.from(msg.content, 'base64'));
                 p.send(JSON.stringify({ t: 'change-accepted', path: msg.path }));
@@ -112,7 +117,7 @@ class Shuttle {
 
         p.on('connect', () => resolve(p));
 
-        p.on('data', (data) => {
+        p.on('data', async (data) => {
           const msg = JSON.parse(data.toString());
           if (msg.t === 'chunk') buffer[msg.i] = msg.d;
           if (msg.t === 'end') {
@@ -120,6 +125,15 @@ class Shuttle {
             buffer = [];
             if (onData) onData(json);
             if (!options.live) p.destroy();
+          }
+
+          if ((msg.t === 'update' || msg.t === 'propose-change') && options.allowChanges && options.autoAccept && options.root) {
+            const dest = safePath(process.cwd(), msg.path);
+            await fs.ensureDir(path.dirname(dest));
+            await fs.writeFile(dest, Buffer.from(msg.content, 'base64'));
+            try {
+              p.send(JSON.stringify({ t: 'change-accepted', path: msg.path }));
+            } catch {}
           }
         });
 
