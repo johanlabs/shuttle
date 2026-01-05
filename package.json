@@ -14,8 +14,9 @@
   "description": "",
   "dependencies": {
     "@roamhq/wrtc": "^0.9.1",
-    "commander": "^11.1.0",
-    "fs-extra": "^11.3.3",
+    "chokidar": "^5.0.0",
+    "commander": "^11.0.0",
+    "fs-extra": "^11.1.1",
     "ora": "^5.4.1",
     "simple-peer": "^9.11.1",
     "socket.io": "^4.8.3",

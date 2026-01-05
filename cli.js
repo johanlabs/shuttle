@@ -5,6 +5,7 @@ const Shuttle = require('./shuttle');
 const fs = require('fs-extra');
 const path = require('path');
 const ora = require('ora');
+const chokidar = require('chokidar');
 
 const program = new Command();
 const shuttle = new Shuttle();
@@ -30,61 +31,54 @@ async function scanDirectory(dir, baseDir = '') {
   return results;
 }
 
-program
-  .name('shuttle')
-  .description('P2P File & Data Transport')
-  .version('0.2.0');
-
 program.command('push')
   .argument('<target>', 'Path do arquivo ou pasta')
-  .action(async (target) => {
+  .option('-w, --watch', 'Monitorar alterações em tempo real')
+  .action(async (target, options) => {
     const spinner = ora('Lendo arquivos...').start();
-    try {
-      const absolutePath = path.resolve(target);
-      const stats = await fs.stat(absolutePath);
-      let payload = [];
+    const absolutePath = path.resolve(target);
+    let payload = [];
 
-      if (stats.isDirectory()) {
-        payload = await scanDirectory(absolutePath);
-      } else {
-        const content = await fs.readFile(absolutePath);
-        payload.push({
-          path: path.basename(absolutePath),
-          content: content.toString('base64'),
-          encoding: 'base64'
-        });
-      }
+    if ((await fs.stat(absolutePath)).isDirectory()) {
+      payload = await scanDirectory(absolutePath);
+    } else {
+      const content = await fs.readFile(absolutePath);
+      payload.push({ path: path.basename(absolutePath), content: content.toString('base64') });
+    }
 
-      spinner.text = 'Estabelecendo túnel P2P...';
-      const id = await shuttle.push(payload);
-      spinner.succeed(`Snapshot pronto! ID: ${id}`);
-      console.log('\nAguardando peer conectar para transferir...');
-    } catch (err) {
-      spinner.fail('Erro no push: ' + err.message);
-      process.exit(1);
+    spinner.text = 'Aguardando peer...';
+    const { id, peerPromise } = await shuttle.push(payload);
+    spinner.succeed(`ID: ${id}`);
+
+    const p = await peerPromise;
+    console.log('\n✅ Conectado! Transferência inicial concluída.');
+
+    if (options.watch) {
+      console.log('👀 Modo Watch ativo. Sincronizando alterações...');
+      chokidar.watch(absolutePath, { ignoreInitial: true }).on('all', async (event, filePath) => {
+        const relPath = path.relative(absolutePath, filePath) || path.basename(filePath);
+        if (event === 'add' || event === 'change') {
+          const content = await fs.readFile(filePath);
+          p.send(JSON.stringify([{ path: relPath, content: content.toString('base64'), event: 'update' }]));
+          console.log(`📤 Atualizado: ${relPath}`);
+        }
+      });
     }
   });
 
 program.command('pull')
-  .argument('<id>', 'ID gerado pelo push')
+  .argument('<id>', 'ID do Shuttle')
   .action(async (id) => {
-    const spinner = ora('Conectando ao peer...').start();
-    try {
-      const files = await shuttle.pull(id);
-      spinner.text = 'Recebendo e reconstruindo arquivos...';
-
-      for (const file of files) {
+    const spinner = ora('Conectando...').start();
+    await shuttle.pull(id, async (data) => {
+      if (spinner.isSpinning) spinner.succeed('Sincronizado!');
+      for (const file of data) {
         const dest = path.resolve(file.path);
         await fs.ensureDir(path.dirname(dest));
         await fs.writeFile(dest, Buffer.from(file.content, 'base64'));
+        if (file.event === 'update') console.log(`📥 Alterado: ${file.path}`);
       }
-
-      spinner.succeed(`Transferência concluída: ${files.length} arquivo(s) extraídos.`);
-      process.exit(0);
-    } catch (err) {
-      spinner.fail('Erro no pull: ' + err.message);
-      process.exit(1);
-    }
+    });
   });
 
 program.parse();
