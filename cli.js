@@ -54,14 +54,23 @@ program.command('push')
     spinner.succeed(`ID: ${id}`);
 
     const p = await peerPromise;
+    let watcher;
 
     if (options.live) {
-      chokidar.watch(absolutePath, { ignoreInitial: true }).on('change', async (filePath) => {
+      watcher = chokidar.watch(absolutePath, { ignoreInitial: true });
+      watcher.on('change', async (filePath) => {
+        if (!p || p.destroyed || !p.connected) return;
         const rel = path.relative(absolutePath, filePath);
         const content = await fs.readFile(filePath);
-        p.send(JSON.stringify({ t: 'update', path: rel, content: content.toString('base64') }));
+        try {
+          p.send(JSON.stringify({ t: 'update', path: rel, content: content.toString('base64') }));
+        } catch {}
       });
     }
+
+    p.on('close', () => {
+      if (watcher) watcher.close();
+    });
   });
 
 program.command('pull')
@@ -69,8 +78,9 @@ program.command('pull')
   .option('--live', 'Receber atualizações contínuas')
   .action(async (id, options) => {
     const spinner = ora('Conectando...').start();
-    let root = process.cwd();
+    const root = process.cwd();
     let peerRef;
+    let watcher;
 
     await shuttle.pull(id, async (data) => {
       if (spinner.isSpinning) spinner.succeed('Recebido');
@@ -82,12 +92,20 @@ program.command('pull')
     }, { live: options.live, onPeer: (p) => { peerRef = p; } });
 
     if (options.live) {
-      chokidar.watch(root, { ignoreInitial: true }).on('change', async (filePath) => {
+      watcher = chokidar.watch(root, { ignoreInitial: true });
+      watcher.on('change', async (filePath) => {
+        if (!peerRef || peerRef.destroyed || !peerRef.connected) return;
         const rel = path.relative(root, filePath);
         const content = await fs.readFile(filePath);
-        if (peerRef) {
+        try {
           peerRef.send(JSON.stringify({ t: 'propose-change', path: rel, content: content.toString('base64') }));
-        }
+        } catch {}
+      });
+    }
+
+    if (peerRef) {
+      peerRef.on('close', () => {
+        if (watcher) watcher.close();
       });
     }
   });
