@@ -39,6 +39,11 @@ program.command('push')
     const absolutePath = path.resolve(target);
     let payload = [];
 
+    if (!(await fs.exists(absolutePath))) {
+      spinner.fail('Caminho não encontrado.');
+      process.exit(1);
+    }
+
     if ((await fs.stat(absolutePath)).isDirectory()) {
       payload = await scanDirectory(absolutePath);
     } else {
@@ -51,16 +56,20 @@ program.command('push')
     spinner.succeed(`ID: ${id}`);
 
     const p = await peerPromise;
-    console.log('\n✅ Conectado! Transferência inicial concluída.');
+    console.log('\n✔ Conectado! Transferência inicial concluída.');
 
     if (options.watch) {
       console.log('👀 Modo Watch ativo. Sincronizando alterações...');
       chokidar.watch(absolutePath, { ignoreInitial: true }).on('all', async (event, filePath) => {
         const relPath = path.relative(absolutePath, filePath) || path.basename(filePath);
         if (event === 'add' || event === 'change') {
-          const content = await fs.readFile(filePath);
-          p.send(JSON.stringify([{ path: relPath, content: content.toString('base64'), event: 'update' }]));
-          console.log(`📤 Atualizado: ${relPath}`);
+          try {
+            const content = await fs.readFile(filePath);
+            p.send(JSON.stringify([{ path: relPath, content: content.toString('base64'), event: 'update' }]));
+            console.log(`📤 Atualizado: ${relPath}`);
+          } catch (err) {
+            console.error(`Erro ao ler arquivo: ${relPath}`);
+          }
         }
       });
     }
@@ -70,15 +79,21 @@ program.command('pull')
   .argument('<id>', 'ID do Shuttle')
   .action(async (id) => {
     const spinner = ora('Conectando...').start();
-    await shuttle.pull(id, async (data) => {
-      if (spinner.isSpinning) spinner.succeed('Sincronizado!');
-      for (const file of data) {
-        const dest = path.resolve(file.path);
-        await fs.ensureDir(path.dirname(dest));
-        await fs.writeFile(dest, Buffer.from(file.content, 'base64'));
-        if (file.event === 'update') console.log(`📥 Alterado: ${file.path}`);
-      }
-    });
+    try {
+      await shuttle.pull(id, async (data) => {
+        if (spinner.isSpinning) spinner.succeed('Sincronizado!');
+        for (const file of data) {
+          const dest = path.resolve(file.path);
+          await fs.ensureDir(path.dirname(dest));
+          await fs.writeFile(dest, Buffer.from(file.content, 'base64'));
+          if (file.event === 'update') console.log(`📥 Alterado: ${file.path}`);
+        }
+      });
+    } catch (err) {
+      spinner.fail('Falha na conexão.');
+      console.error(err);
+      process.exit(1);
+    }
   });
 
 program.parse();
