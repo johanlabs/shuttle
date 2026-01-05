@@ -1,0 +1,19 @@
+{
+  "name": "shuttle",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@roamhq/wrtc": "^0.9.1",
+    "simple-peer": "^9.11.1",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
+    "uuid": "^13.0.0"
+  }
+}
