@@ -1,6 +1,20 @@
 const Peer = require('simple-peer');
 const wrtc = require('@roamhq/wrtc');
 const io = require('socket.io-client');
+const fs = require('fs-extra');
+const path = require('path');
+
+const CHUNK_SIZE = 64 * 1024;
+
+function chunkString(str) {
+  const chunks = [];
+  let i = 0;
+  while (i < str.length) {
+    chunks.push(str.slice(i, i + CHUNK_SIZE));
+    i += CHUNK_SIZE;
+  }
+  return chunks;
+}
 
 class Shuttle {
   constructor(signalUrl = 'http://localhost:3000') {
@@ -8,19 +22,13 @@ class Shuttle {
     this.activePeers = new Set();
   }
 
-  push(initialPayload) {
+  push(initialPayload, options = {}) {
     return new Promise((resolve) => {
       this.socket.emit('create-id');
-      
+
       this.socket.once('id-generated', (id) => {
         this.socket.on('peer-ready', (peerId) => {
-          const p = new Peer({
-            initiator: true,
-            trickle: true,
-            wrtc,
-            config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] }
-          });
-
+          const p = new Peer({ initiator: true, trickle: true, wrtc });
           this.activePeers.add(p);
 
           p.on('signal', (signal) => {
@@ -33,8 +41,24 @@ class Shuttle {
           this.socket.on('signal', onSignal);
 
           p.on('connect', () => {
-            p.send(JSON.stringify(initialPayload));
-            // Mantemos a conexão viva para o modo watch
+            const payload = JSON.stringify(initialPayload);
+            const chunks = chunkString(payload);
+            for (let i = 0; i < chunks.length; i++) {
+              p.send(JSON.stringify({ t: 'chunk', i, d: chunks[i] }));
+            }
+            p.send(JSON.stringify({ t: 'end' }));
+          });
+
+          p.on('data', async (data) => {
+            const msg = JSON.parse(data.toString());
+            if (msg.t === 'propose-change' && options.allowChanges) {
+              if (options.autoAccept && options.root) {
+                const dest = path.resolve(options.root, msg.path);
+                await fs.ensureDir(path.dirname(dest));
+                await fs.writeFile(dest, Buffer.from(msg.content, 'base64'));
+                p.send(JSON.stringify({ t: 'change-accepted', path: msg.path }));
+              }
+            }
           });
 
           p.on('close', () => {
@@ -42,14 +66,11 @@ class Shuttle {
             this.socket.off('signal', onSignal);
           });
 
-          p.on('error', (err) => {
-            console.error('Peer Error:', err);
+          p.on('error', () => {
             this.activePeers.delete(p);
           });
         });
 
-        // Resolvemos o ID imediatamente para o CLI mostrar, 
-        // mas o peerPromise aguarda o evento de conexão real
         resolve({
           id,
           peerPromise: new Promise((res) => {
@@ -61,7 +82,7 @@ class Shuttle {
                     res(p);
                   }
                 }
-              }, 500);
+              }, 300);
             });
           })
         });
@@ -69,19 +90,16 @@ class Shuttle {
     });
   }
 
-  pull(id, onData) {
+  pull(id, onData, options = {}) {
     return new Promise((resolve, reject) => {
       this.socket.emit('join-id', id);
 
       this.socket.once('peer-joined', (hostId) => {
-        const p = new Peer({
-          initiator: false,
-          trickle: true,
-          wrtc,
-          config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] }
-        });
-
+        const p = new Peer({ initiator: false, trickle: true, wrtc });
         this.activePeers.add(p);
+        let buffer = [];
+
+        if (options.onPeer) options.onPeer(p);
 
         p.on('signal', (signal) => {
           this.socket.emit('signal', { to: hostId, signal });
@@ -92,16 +110,16 @@ class Shuttle {
         };
         this.socket.on('signal', onSignal);
 
-        p.on('connect', () => {
-          resolve(p);
-        });
+        p.on('connect', () => resolve(p));
 
         p.on('data', (data) => {
-          try {
-            const json = JSON.parse(data.toString());
+          const msg = JSON.parse(data.toString());
+          if (msg.t === 'chunk') buffer[msg.i] = msg.d;
+          if (msg.t === 'end') {
+            const json = JSON.parse(buffer.join(''));
+            buffer = [];
             if (onData) onData(json);
-          } catch (e) {
-            console.error('Data Parse Error');
+            if (!options.live) p.destroy();
           }
         });
 
