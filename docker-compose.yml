@@ -1,0 +1,9 @@
+ version: "3.9"
+
+services:
+  shuttle-signal:
+    build: .
+    container_name: shuttle-signal
+    ports:
+      - "5123:3000"
+    restart: unless-stopped
